@@ -1,0 +1,9 @@
+<?xml version="1.0" ?>
+<!-- Configuration of the Ant build system to generate a Jar file --> 
+<project name="Project" default="CreateJar">
+  <target name="CreateJar" description="Create Jar file">
+        <jar jarfile="Project.jar" basedir="." includes="dota/statistics/*.class">
+        	<zipgroupfileset dir="../lib" />
+    	</jar>
+  </target>
+</project>
