@@ -5,6 +5,7 @@ import java.io.IOException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
@@ -30,6 +31,7 @@ public class Stat {
 			
 			JSONArray players = matchDetails.getJSONObject("result").getJSONArray("players");
 			boolean radWin = matchDetails.getJSONObject("result").getBoolean("radiant_win");
+			int duration = matchDetails.getJSONObject("result").getInt("duration");
 			if(players == null || players.length() < 10) {
 				return;
 			}
@@ -43,13 +45,20 @@ public class Stat {
 				int deaths = player.optInt("deaths");
 				double KDA = killsAssists / (deaths == 0 ? 1 : deaths);
 				int lastHits = player.optInt("last_hits");
+				int heroDamage = player.getInt("hero_damage");
+				int towerDamage = player.getInt("tower_damage");
+				int gold = player.getInt("gold_per_min");
 				IntWritable heroId = new IntWritable();
 				heroId.set(player.optInt("hero_id"));
 				Text attr = new Text();
 				StringBuilder output = new StringBuilder();
 				output.append(Double.toString(KDA)).append(",")
 				.append(Integer.toString(lastHits)).append(",")
-				.append(Boolean.toString(radWin));
+				.append(Boolean.toString(radWin)).append(",")
+				.append(Integer.toString(duration)).append(",")
+				.append(heroDamage).append(",")
+				.append(towerDamage).append(",")
+				.append(gold);
 				attr.set(output.toString());
 				context.write(heroId, attr);
 			}
@@ -63,30 +72,51 @@ public class Stat {
 				int deaths = player.optInt("deaths");
 				double KDA = killsAssists / (deaths == 0 ? 1 : deaths);
 				int lastHits = player.optInt("last_hits");
+				int heroDamage = player.getInt("hero_damage");
+				int towerDamage = player.getInt("tower_damage");
+				int gold = player.getInt("gold_per_min");
 				IntWritable heroId = new IntWritable();
 				heroId.set(player.optInt("hero_id"));
 				Text attr = new Text();
 				StringBuilder output = new StringBuilder();
 				output.append(Double.toString(KDA)).append(",")
 				.append(Integer.toString(lastHits)).append(",")
-				.append(Boolean.toString(!radWin));
+				.append(Boolean.toString(!radWin)).append(",")
+				.append(Integer.toString(duration)).append(",")
+				.append(heroDamage).append(",")
+				.append(towerDamage).append(",")
+				.append(gold);
 				attr.set(output.toString());
 				context.write(heroId, attr);
 			}
 		}
 	}
 	
-	public static class GameReducer extends Reducer<IntWritable, Text, IntWritable, Text> {
+	public static class GameReducer extends Reducer<IntWritable, Text, NullWritable, Text> {
 		int total;
 		double KDA;
 		int wins;
 		long totalLastHits;
+		int[] timeWins;
+		int[] timeTotal;
+		long towerDamage;
+		long heroDamage;
+		long gold;
 		IntWritable heroId;
 		public void setup (Context context) {
 			total = 0;
 			KDA = 0d;
 			wins = 0;
 			totalLastHits = 0;
+			towerDamage = 0;
+			heroDamage = 0;
+			gold = 0;
+			timeWins = new int[5];
+			timeTotal = new int[5];
+			for(int i = 0; i < 5; i++) {
+				timeWins[i] = 0;
+				timeTotal[i] = 0;
+			}
 		}
 		
 		public void reduce (IntWritable key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
@@ -99,18 +129,55 @@ public class Stat {
 				totalLastHits += Integer.parseInt(records[1]);
 				wins += (Boolean.parseBoolean(records[2]) ? 1 : 0);
 				++total;
+				heroDamage += (Integer.parseInt(records[4]));
+				towerDamage += (Integer.parseInt(records[5]));
+				gold += (Integer.parseInt(records[6]));
+				switch((int)Integer.parseInt(records[3])/900) {
+				case 0:
+					timeWins[0] += (Boolean.parseBoolean(records[2]) ? 1 : 0);
+					timeTotal[0] += 1;
+					break;
+				case 1:
+					timeWins[1] += (Boolean.parseBoolean(records[2]) ? 1 : 0);
+					timeTotal[1] += 1;
+					break;
+				case 2:
+					timeWins[2] += (Boolean.parseBoolean(records[2]) ? 1 : 0);
+					timeTotal[2] += 1;
+					break;
+				case 3:
+					timeWins[3] += (Boolean.parseBoolean(records[2]) ? 1 : 0);
+					timeTotal[3] += 1;
+					break;
+				default:
+					timeWins[4] += (Boolean.parseBoolean(records[2]) ? 1 : 0);
+					timeTotal[4] += 1;
+					break;
+				}
 			}
 		}
 		
 		public void cleanup (Context context) throws IOException, InterruptedException {
 			Text record = new Text();
 			StringBuilder output = new StringBuilder();
-			output.append(Integer.toString(wins)).append(", ")
+			if(heroId == null) {
+				return;
+			}
+			output.append(heroId.get()).append(", ")
+				.append(Integer.toString(wins)).append(", ")
 				.append(Integer.toString(total)).append(", ")
+				.append(Double.toString((double)wins*100/total)).append(", ")
 				.append(Double.toString((double)totalLastHits/total)).append(", ")
-				.append(Double.toString(KDA/total));
+				.append(Double.toString(KDA/total)).append(", ");
+			for(int i = 0; i < 5; i++) {
+				output.append(timeWins[i]).append(", ").append(timeTotal[i]).append(", ");
+				output.append(Double.toString((double)timeWins[i]*100/timeTotal[i])).append(", ");
+			}
+			output.append((double)heroDamage/total).append(", ")
+				.append((double)towerDamage/total).append(", ")
+				.append((double)gold/total);
 			record.set(output.toString());
-			context.write(heroId, record);
+			context.write(NullWritable.get(), record);
 		}
 	}
 	
@@ -127,7 +194,7 @@ public class Stat {
 		job.setReducerClass(GameReducer.class);
 		job.setNumReduceTasks(113);
 		job.setMapOutputKeyClass(IntWritable.class);
-		job.setOutputKeyClass(IntWritable.class);
+		job.setOutputKeyClass(NullWritable.class);
 		job.setOutputValueClass(Text.class);
 		FileInputFormat.setInputPaths(job, new Path(args[0]));
 		
